@@ -12,3 +12,5 @@ CREATE TABLE IF NOT EXISTS scored_transactions (
     created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW() NOT NULL
 );
 
+ 
+ 

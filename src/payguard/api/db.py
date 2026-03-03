@@ -65,3 +65,5 @@ def log_scored_transaction(
     session.add(record)
     session.commit()
 
+
+

@@ -21,3 +21,5 @@ class TransactionResponse(BaseModel):
     flag_threshold: float
     block_threshold: float
 
+
+

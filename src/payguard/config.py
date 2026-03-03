@@ -33,3 +33,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 MLFLOW_DIR.mkdir(parents=True, exist_ok=True)
 
+
+
+
