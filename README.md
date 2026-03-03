@@ -108,16 +108,4 @@ docker exec -i payguard-db psql -U postgres -d payguard < sql/schema.sql
 - API: `http://localhost:8000/docs`
 - MLflow UI: `http://localhost:5000`
 
-### How this maps to your resume bullets
-
-- **“Developed a real-time credit card fraud detection system that scores 1M+ online transactions”**
-  - The training pipeline is built to handle large synthetic datasets using **PySpark DataFrames**, and the FastAPI service is stateless and horizontally scalable (containerized).
-- **“Engineered 50+ behavioral fraud features with PySpark and trained logistic regression and XGBoost models achieving 0.85+ ROC-AUC”**
-  - Behavioral features (velocity, device/merchant patterns, recency stats, etc.) are implemented in `features_pyspark.py`.
-  - `train.py` trains both logistic regression and XGBoost, evaluates ROC-AUC, and logs results to MLflow.
-- **“Reducing false positives by 30% via threshold optimization and drift monitoring”**
-  - `thresholds.py` contains threshold optimization utilities that pick approve/flag/block cutoffs under business constraints.
-  - Hooks for monitoring feature/score drift can be added for production environments.
-
-This project is intentionally **portfolio-friendly**: it is small enough to run on a laptop, but structured like a production fraud detection system so you can comfortably discuss **ML modeling**, **feature engineering**, **evaluation**, and **serving** in interviews.
 
