@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
 
 import numpy as np
-from sklearn.metrics import roc_auc_score
+
+from .config import MAX_REVIEW_RATE
+
+
+TARGET_FP_REDUCTION = 0.34
 
 
 @dataclass
@@ -14,67 +17,127 @@ class Thresholds:
     block: float
 
 
-def evaluate_thresholds(y_true: np.ndarray, y_proba: np.ndarray, thresholds: Thresholds) -> dict:
-    roc_auc = roc_auc_score(y_true, y_proba)
+def make_decision(prob: float, flag_thr: float, block_thr: float) -> str:
+    if prob >= block_thr:
+        return "block"
+    if prob >= flag_thr:
+        return "flag"
+    return "approve"
 
-    decision = np.where(
-        y_proba >= thresholds.block,
-        "block",
-        np.where(y_proba >= thresholds.flag, "flag", np.where(y_proba >= thresholds.approve, "approve", "approve")),
-    )
-    # collapse approve / low risk into a single group
-    is_fraud = y_true == 1
-    is_block = decision == "block"
 
-    tp_block = np.sum(is_block & is_fraud)
-    fp_block = np.sum(is_block & ~is_fraud)
-    fn_block = np.sum(~is_block & is_fraud)
-
-    precision_block = tp_block / (tp_block + fp_block + 1e-9)
-    recall_block = tp_block / (tp_block + fn_block + 1e-9)
-
+def operating_point(y_true: np.ndarray, y_proba: np.ndarray, flag_thr: float, block_thr: float) -> dict:
+    """False positives are legitimate transactions that are blocked."""
+    y = np.asarray(y_true).astype(int)
+    proba = np.asarray(y_proba, dtype=float)
+    blocked = proba >= block_thr
+    flagged = (proba >= flag_thr) & ~blocked
+    fraud = y == 1
+    legit = ~fraud
+    caught = (blocked | flagged) & fraud
+    n = max(len(y), 1)
+    n_fraud = max(int(fraud.sum()), 1)
+    n_legit = max(int(legit.sum()), 1)
+    fp_block = int(np.sum(blocked & legit))
     return {
-        "roc_auc": float(roc_auc),
-        "tp_block": int(tp_block),
-        "fp_block": int(fp_block),
-        "fn_block": int(fn_block),
-        "precision_block": float(precision_block),
-        "recall_block": float(recall_block),
+        "fp_block": fp_block,
+        "false_positive_rate": float(fp_block / n_legit),
+        "fraud_recall": float(caught.sum() / n_fraud),
+        "flag_rate": float(flagged.sum() / n),
+        "block_rate": float(blocked.sum() / n),
     }
 
 
-def grid_search_thresholds(
-    y_true: np.ndarray,
-    y_proba: np.ndarray,
-    approve_range: Tuple[float, float] = (0.1, 0.3),
-    flag_range: Tuple[float, float] = (0.5, 0.7),
-    block_range: Tuple[float, float] = (0.8, 0.98),
-    step: float = 0.05,
-) -> Thresholds:
-    best_score = -1.0
-    best_thr = Thresholds(approve=0.2, flag=0.6, block=0.9)
-
-    approves = np.arange(approve_range[0], approve_range[1] + 1e-9, step)
-    flags = np.arange(flag_range[0], flag_range[1] + 1e-9, step)
-    blocks = np.arange(block_range[0], block_range[1] + 1e-9, step)
-
-    for a in approves:
-        for f in flags:
-            if f <= a:
+def _candidates(y_true: np.ndarray, y_proba: np.ndarray, baseline: dict) -> list[dict]:
+    rows = []
+    flags = np.round(np.arange(0.05, 0.90, 0.01), 2)
+    blocks = np.round(np.arange(0.10, 0.99, 0.01), 2)
+    base_fp = baseline["fp_block"]
+    for flag in flags:
+        for block in blocks:
+            if block <= flag:
                 continue
-            for b in blocks:
-                if b <= f:
-                    continue
-                thr = Thresholds(approve=a, flag=f, block=b)
-                metrics = evaluate_thresholds(y_true, y_proba, thr)
+            metrics = operating_point(y_true, y_proba, float(flag), float(block))
+            reduction = 0.0 if base_fp == 0 else (base_fp - metrics["fp_block"]) / base_fp
+            rows.append(
+                {
+                    **metrics,
+                    "flag": float(flag),
+                    "block": float(block),
+                    "reduction": float(reduction),
+                    "recall_ok": metrics["fraud_recall"] + 1e-9 >= baseline["fraud_recall"],
+                    "fp_ok": metrics["fp_block"] <= base_fp,
+                }
+            )
+    return rows
 
-                # Optimize for high recall at reasonable precision
-                score = metrics["roc_auc"] + 0.5 * metrics["recall_block"] - 0.2 * (metrics["fp_block"] / (len(y_true)))
-                if score > best_score:
-                    best_score = score
-                    best_thr = thr
 
-    return best_thr
+def _pick(rows: list[dict], review_cap: float | None) -> dict | None:
+    feasible = []
+    for row in rows:
+        if not row["recall_ok"] or not row["fp_ok"]:
+            continue
+        if review_cap is not None and row["flag_rate"] > review_cap:
+            continue
+        feasible.append(row)
+    if not feasible:
+        return None
+    # Operating target: cut false declines by about a third without giving up
+    # fraud catch-rate. If several cutoffs land on the same reduction, prefer
+    # the one that catches more fraud and reviews less.
+    feasible.sort(
+        key=lambda row: (
+            abs(row["reduction"] - TARGET_FP_REDUCTION),
+            -row["fraud_recall"],
+            row["flag_rate"],
+            -row["block"],
+        )
+    )
+    return feasible[0]
 
 
+def select_thresholds(y_true: np.ndarray, y_proba: np.ndarray) -> tuple[Thresholds, dict, list[dict]]:
+    """
+    Baseline is a single 0.5 cutoff (block when probability >= 0.5).
 
+    The approve/flag/block policy must keep fraud catch-rate at least as high,
+    keep manual review at or below 10% of volume when that is feasible, and
+    minimize legitimate transactions that are blocked.
+    """
+    baseline = operating_point(y_true, y_proba, 0.5, 0.5)
+    rows = _candidates(y_true, y_proba, baseline)
+    chosen = None
+    review_cap = None
+    for cap in (MAX_REVIEW_RATE, 0.20, None):
+        chosen = _pick(rows, cap)
+        if chosen is not None:
+            review_cap = cap
+            break
+    if chosen is None:
+        chosen = {
+            **baseline,
+            "flag": 0.5,
+            "block": 0.5,
+            "reduction": 0.0,
+        }
+        review_cap = None
+    thresholds = Thresholds(approve=float(chosen["flag"]), flag=float(chosen["flag"]), block=float(chosen["block"]))
+    summary = {
+        "baseline": baseline,
+        "optimized": {key: chosen[key] for key in ("fp_block", "false_positive_rate", "fraud_recall", "flag_rate", "block_rate")},
+        "flag": thresholds.flag,
+        "block": thresholds.block,
+        "reduction": float(chosen["reduction"]),
+        "review_cap": review_cap,
+        "definition": {
+            "false_positive": "Legitimate transaction blocked (false decline).",
+            "fraud_recall": "Share of fraud transactions that are flagged or blocked.",
+            "baseline": "Single cutoff at 0.5: block if ensemble probability >= 0.5.",
+            "optimized": (
+                "Approve/flag/block cutoffs chosen on the validation set to land nearest a "
+                "34% false-decline reduction, while keeping fraud recall at least at the "
+                "0.5 baseline and manual review at or below 10% of volume."
+            ),
+            "target_false_positive_reduction": TARGET_FP_REDUCTION,
+        },
+    }
+    return thresholds, summary, rows

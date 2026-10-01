@@ -20,6 +20,5 @@ class TransactionResponse(BaseModel):
     approve_threshold: float
     flag_threshold: float
     block_threshold: float
-
-
-
+    drift_alert: bool
+    thresholds_adjusted_for_drift: bool

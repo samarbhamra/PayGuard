@@ -1,20 +1,14 @@
 ## PayGuard – Real-Time Credit Card Fraud Detection
 
-PayGuard is an end-to-end fraud detection side project designed to mirror a realistic production system for **credit card transaction risk scoring**. It showcases skills across **ML/DS**, **data engineering**, and **backend/SWE**.
+PayGuard scores card transactions and turns a fraud probability into an **approve**, **flag**, or **block** decision.
 
-### High-level overview
+The production score is an ensemble of logistic regression and XGBoost. Features are behavioral signals built in PySpark (user history, short-horizon velocity, device and merchant patterns). Thresholds are chosen on a validation set, then checked on a held-out test set. A population-stability monitor compares live traffic with the training distribution and can move the cutoffs when scores drift, so a shift does not silently increase false declines.
 
-- **Objective**: Score streaming-like credit card transactions in real time and classify them into **approve / flag / block** decisions.
-- **Tech stack**: `Python`, `PySpark`, `scikit-learn`, `XGBoost`, `FastAPI`, `PostgreSQL`, `MLflow`, `Docker`.
-- **Key capabilities**:
-  - Synthetic transaction data generation and labeling with realistic fraud patterns.
-  - PySpark-based feature engineering to build **50+ behavioral fraud features**.
-  - Model training with logistic regression and XGBoost, tracked via **MLflow**.
-  - Threshold optimization targeting high **ROC-AUC** while controlling false positives.
-  - Real-time scoring API built with **FastAPI**, logging decisions to **Postgres**.
-  - Dockerized services with `docker-compose` for local reproducibility.
+### Stack
 
-### Project structure
+Python, PySpark, scikit-learn, XGBoost, SQLAlchemy, PostgreSQL, FastAPI, MLflow, Docker. If Postgres is not running, the API falls back to a local SQLite file so scoring still works.
+
+### Layout
 
 ```text
 PayGuard/
@@ -22,60 +16,61 @@ PayGuard/
   requirements.txt
   docker-compose.yml
   Dockerfile.api
-  sql/
-    schema.sql
-  src/
-    payguard/
-      __init__.py
-      config.py
-      data_generation.py
-      features_pyspark.py
-      train.py
-      thresholds.py
-      api/
-        __init__.py
-        main.py
-        schemas.py
-        db.py
+  sql/schema.sql
+  src/payguard/
+    config.py
+    data_generation.py
+    features_online.py
+    features_pyspark.py
+    drift.py
+    thresholds.py
+    scoring.py
+    train.py
+    api/
+      main.py
+      schemas.py
+      db.py
 ```
 
-### Getting started (local, non-Docker)
+### Train
 
-1. **Create a virtual environment and install dependencies**
+Java 17 is required for PySpark (`JAVA_HOME`, or a JDK under `~/.local/jdk`). Training generates 1,000,000 synthetic transactions, fits both models, writes metrics, and batch-scores every transaction with the ensemble.
 
 ```bash
-cd PayGuard
 python -m venv .venv
-source .venv/bin/activate  # on Windows: .venv\\Scripts\\activate
+source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-2. **Train models and export artifacts**
-
-This will:
-- Generate synthetic transaction data.
-- Compute PySpark-based behavioral features.
-- Train logistic regression and XGBoost models.
-- Log runs to MLflow and save the production model under `models/`.
-
-```bash
 python -m src.payguard.train
 ```
 
-3. **Run the API**
+Artifacts land in `models/`:
+
+- `xgboost_prod_model.json`
+- `logreg_pipeline.joblib`
+- `thresholds.npz`
+- `feature_columns.txt`
+- `drift_reference.json`
+- `metrics.json`
+
+`metrics.json` is the measured test-set ROC-AUC and false-decline reduction. The API serves the same document at `GET /metrics`.
+
+### API
 
 ```bash
-uvicorn src.payguard.api.main:app --reload
+uvicorn src.payguard.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-Then send a sample request:
+- Docs: `http://localhost:8000/docs`
+- Health: `http://localhost:8000/health`
+- Metrics: `http://localhost:8000/metrics`
+- Drift: `http://localhost:8000/drift`
 
 ```bash
 curl -X POST "http://localhost:8000/score" \
   -H "Content-Type: application/json" \
   -d '{
     "transaction_id": "tx_123",
-    "user_id": "user_42",
+    "user_id": 42,
     "amount": 123.45,
     "merchant_category": "online_retail",
     "device_type": "mobile",
@@ -84,28 +79,27 @@ curl -X POST "http://localhost:8000/score" \
   }'
 ```
 
-### Running with Docker + Postgres + MLflow
+The scorer rebuilds the same point-in-time features from that user's previously scored transactions. The first time a user is seen, history features are empty, which matches a user's first transaction in training.
 
-1. **Start the stack**
+### Docker
 
 ```bash
 docker compose up --build
-```
-
-This will start:
-- `api`: FastAPI fraud scoring service.
-- `db`: PostgreSQL instance for logging scored transactions.
-- `mlflow`: MLflow tracking server with a local file backend.
-
-2. **Initialize the database**
-
-```bash
 docker exec -i payguard-db psql -U postgres -d payguard < sql/schema.sql
 ```
 
-3. **Access services**
-
 - API: `http://localhost:8000/docs`
-- MLflow UI: `http://localhost:5000`
+- MLflow: `http://localhost:5000`
 
+Train on the host first so `./models` exists. Compose mounts that directory into the API container and points the API at Postgres.
+
+### Measured results
+
+From the held-out test set in `models/metrics.json` after training on 1,000,000 transactions:
+
+- 65 PySpark behavioral features (82 columns after encoding)
+- Logistic regression ROC-AUC 0.897, XGBoost ROC-AUC 0.898, ensemble ROC-AUC 0.899
+- False declines fell from 397 to 244, a 38.5% reduction, while fraud catch-rate rose from 0.19 to 0.70
+- The validation policy was the cutoff nearest a one-third false-decline cut (36.7% on validation). The number to cite is the test result, 38.5%
+- Drift monitoring: train-vs-test amount PSI is about 0. A doubled-amount slice reaches PSI 0.41 and trips the alert. Recalibrating thresholds on a positively shifted score distribution cuts the extra false declines from 763 to 271
 
