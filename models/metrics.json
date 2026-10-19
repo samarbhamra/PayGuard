@@ -1,0 +1,36 @@
+{
+  "n_transactions": 1000000,
+  "n_scored_transactions": 1000000,
+  "n_behavioral_features": 65,
+  "n_model_features": 82,
+  "test": {
+    "roc_auc_logreg": 0.8969886262711951,
+    "roc_auc_xgboost": 0.898362770056073,
+    "roc_auc_ensemble": 0.899355396731294,
+    "baseline_false_positives": 397,
+    "optimized_false_positives": 244,
+    "false_positive_reduction": 0.3853904282115869,
+    "baseline_fraud_recall": 0.19464063149148317,
+    "optimized_fraud_recall": 0.7006647278770254,
+    "baseline_flag_rate": 0.0,
+    "optimized_flag_rate": 0.09165333333333334,
+    "flag_threshold": 0.07,
+    "block_threshold": 0.56
+  },
+  "validation_false_positive_reduction": 0.36666666666666664,
+  "review_cap": 0.1,
+  "drift": {
+    "amount_psi_train_vs_test": 7.561563735873663e-05,
+    "amount_psi_train_vs_shifted": 0.4103713892122255,
+    "shifted_score_false_positives_fixed": 763,
+    "shifted_score_false_positives_recalibrated": 271,
+    "shifted_score_false_positive_reduction": 0.6448230668414154
+  },
+  "definition": {
+    "false_positive": "Legitimate transaction blocked (false decline).",
+    "fraud_recall": "Share of fraud transactions that are flagged or blocked.",
+    "baseline": "Single cutoff at 0.5: block if ensemble probability >= 0.5.",
+    "optimized": "Approve/flag/block cutoffs chosen on the validation set to land nearest a 34% false-decline reduction, while keeping fraud recall at least at the 0.5 baseline and manual review at or below 10% of volume.",
+    "target_false_positive_reduction": 0.34
+  }
+}

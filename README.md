@@ -54,6 +54,8 @@ Artifacts land in `models/`:
 
 `metrics.json` is the measured test-set ROC-AUC and false-decline reduction. The API serves the same document at `GET /metrics`.
 
+The scoring artifacts above are in the repo, so the API can score without training again. The threshold-search dump, `models/threshold_curve.csv`, stays local.
+
 ### API
 
 ```bash

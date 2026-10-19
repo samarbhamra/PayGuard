@@ -3,6 +3,13 @@ __pycache__/
 *.pyc
 data/
 mlruns/
-models/
+models/*
+!models/xgboost_prod_model.json
+!models/logreg_pipeline.joblib
+!models/thresholds.npz
+!models/feature_columns.txt
+!models/ensemble.json
+!models/drift_reference.json
+!models/metrics.json
 .env
 .DS_Store
